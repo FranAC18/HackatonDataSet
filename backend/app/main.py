@@ -4,11 +4,10 @@ import subprocess
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict
 
 app = FastAPI(title="Hackaton Data Ecuador API")
 
-# Configuración de CORS para permitir que el frontend se conecte
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,79 +16,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuración de rutas de archivos
+# Rutas de archivos
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DATA = os.path.join(BASE_DIR, "data", "raw", "mdi_homicidiosintencionales_pm_2014_2025.csv")
 PROCESSED_DATA = os.path.join(BASE_DIR, "data", "processed", "dataset_final.csv")
 COORDS_DATA = os.path.join(BASE_DIR, "data", "processed", "coordenadas.json")
 
 @app.get("/")
 async def root():
-    return {"message": "API de Procesamiento de Datos Homicidios Ecuador activa"}
+    return {"message": "Servidor funcionando"}
 
-# --- ENDPOINT QUE BUSCA TU FRONTEND ---
+# --- ESTE ES EL ENDPOINT QUE TE DABA ERROR 404 ---
+@app.get("/api/datos-mapa")
+async def obtener_mapa():
+    """Retorna datos para el mapa con las coordenadas"""
+    if not os.path.exists(PROCESSED_DATA) or not os.path.exists(COORDS_DATA):
+        raise HTTPException(status_code=404, detail="Dataset o coordenadas no encontrados. Procesa los datos primero.")
+
+    try:
+        df = pd.read_csv(PROCESSED_DATA)
+        with open(COORDS_DATA, "r", encoding="utf-8") as f:
+            coords = json.load(f)
+
+        map_data = []
+        for _, row in df.iterrows():
+            # Limpiamos el nombre del cantón para que coincida con el JSON
+            canton = str(row["Cantón"]).strip().upper()
+            if canton in coords:
+                map_data.append({
+                    "lat": coords[canton]["lat"],
+                    "lon": coords[canton]["lon"],
+                    "provincia": row["Provincia"],
+                    "canton": row["Cantón"],
+                    "tipo": row["Tipo de muerte"],
+                    "arma": row["Arma"],
+                    "fecha": row["Fecha"]
+                })
+        return map_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al leer datos: {str(e)}")
+
+# --- OTROS ENDPOINTS NECESARIOS ---
+
 @app.post("/api/procesar-dataset")
 async def procesar_dataset():
-    """
-    Este endpoint ejecuta la cadena de agentes:
-    Estandarización -> Limpieza -> Filtrado -> Georreferenciación
-    """
-    scripts = [
-        "1StandardizationAgent.py",
-        "2DeepCleaningAgent.py",
-        "3FilterAgent.py",
-        "4GeoreferenceAgent.py"
-    ]
-    
+    """Ejecuta los scripts de procesamiento en orden"""
+    scripts = ["1StandardizationAgent.py", "2DeepCleaningAgent.py", "3FilterAgent.py", "4GeoreferenceAgent.py"]
     try:
-        # Ejecutar cada script en orden
         for script in scripts:
             script_path = os.path.join(BASE_DIR, "scripts", script)
-            result = subprocess.run(["python", script_path], capture_output=True, text=True)
-            if result.returncode != 0:
-                raise Exception(f"Error en {script}: {result.stderr}")
-        
-        return {
-            "status": "success", 
-            "message": "Pipeline completado: Datos estandarizados, limpiados y georreferenciados."
-        }
+            subprocess.run(["python", script_path], check=True)
+        return {"status": "success", "message": "Pipeline completado"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/datos")
 async def obtener_datos():
-    """Retorna los registros procesados para la tabla o gráficos"""
+    """Retorna los últimos registros para la tabla"""
     if not os.path.exists(PROCESSED_DATA):
-        raise HTTPException(status_code=404, detail="El dataset procesado aún no existe. Ejecute el procesamiento primero.")
-    
+        return []
     df = pd.read_csv(PROCESSED_DATA)
-    # Limitar a los últimos 500 registros para no saturar el navegador si es muy grande
-    return df.tail(500).to_dict(orient="records")
-
-@app.get("/api/mapa")
-async def obtener_mapa():
-    """Retorna datos optimizados para el mapa interactivo"""
-    if not os.path.exists(PROCESSED_DATA) or not os.path.exists(COORDS_DATA):
-        raise HTTPException(status_code=404, detail="Datos geográficos no encontrados.")
-
-    df = pd.read_csv(PROCESSED_DATA)
-    with open(COORDS_DATA, "r", encoding="utf-8") as f:
-        coords = json.load(f)
-
-    map_data = []
-    for _, row in df.iterrows():
-        canton = str(row["Cantón"]).strip().upper()
-        if canton in coords:
-            map_data.append({
-                "lat": coords[canton]["lat"],
-                "lon": coords[canton]["lon"],
-                "provincia": row["Provincia"],
-                "canton": row["Cantón"],
-                "tipo": row["Tipo de muerte"],
-                "fecha": row["Fecha"]
-            })
-    return map_data
+    return df.tail(100).to_dict(orient="records")
 
 if __name__ == "__main__":
     import uvicorn
+    # Importante: host 0.0.0.0 o 127.0.0.1 y puerto 8000
     uvicorn.run(app, host="127.0.0.1", port=8000)

@@ -12,6 +12,7 @@ PIPELINE = [
     "2DeepCleaningAgent.py",
     "3FilterAgent.py",
     "4GeoreferenceAgent.py"
+    "5TimeAndDemographicsAgent.py"
 ]
 
 def run_script(script_name):

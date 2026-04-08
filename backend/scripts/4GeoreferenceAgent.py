@@ -4,13 +4,16 @@ import json
 import unicodedata
 from pathlib import Path
 
-# --- CONFIGURACIÓN DE RUTAS ---
-JSON_PATH = Path(r"F:\Hackaton\IABoys\backend\data\processed\coordenadas.json")
+# --- CONFIGURACIÓN DE RUTAS RELATIVAS ---
+# BASE_DIR apunta a la raíz del proyecto (IABoys)
 BASE_DIR = Path(__file__).resolve().parent.parent
+# Ruta al JSON de coordenadas en data/processed
+JSON_PATH = BASE_DIR / "data" / "processed" / "coordenadas.json"
+# Archivo de datos final en data/processed
 FILE_PATH = BASE_DIR / "data" / "processed" / "dataset_final.csv"
 
 def normalizar_texto(texto):
-    """Normaliza texto: mayúsculas y quita tildes."""
+    """Normaliza texto: mayúsculas y quita tildes para asegurar cruces."""
     if pd.isna(texto): return texto
     texto = str(texto).upper().strip()
     texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
@@ -18,7 +21,7 @@ def normalizar_texto(texto):
     return texto
 
 def cargar_json_coordenadas():
-    """Carga el diccionario desde el archivo JSON."""
+    """Carga el diccionario desde el archivo JSON usando la ruta relativa."""
     try:
         with open(JSON_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -32,39 +35,39 @@ def imputar_geo():
             print(f"Error: No existe el archivo en {FILE_PATH}")
             return
         
+        # Carga del dataset desde la carpeta processed
         df = pd.read_csv(FILE_PATH)
 
-        # AJUSTE DE NOMBRES DE COLUMNAS:
-        # Si el archivo tiene 'lat'/'lon' (del paso 1), los usamos. 
-        # Si tiene 'latitud'/'longitud', también.
+        # Identificación dinámica de columnas
         col_lat = 'lat' if 'lat' in df.columns else 'latitud'
         col_lon = 'lon' if 'lon' in df.columns else 'longitud'
         
-        print(f"Usando columnas: {col_lat}, {col_lon}")
+        print(f"Procesando imputación en: {col_lat}, {col_lon}")
 
-        # Identificar nulos originales
+        # Identificar nulos originales para el reporte final
         mask_nulos_init = (df[col_lat].isna()) | (df[col_lat] == 0.0)
 
-        # Normalización
+        # Normalización de categorías para el agrupamiento
         df['provincia'] = df['provincia'].apply(normalizar_texto)
         df['canton'] = df['canton'].apply(normalizar_texto)
         
+        # Limpieza de valores inválidos antes del cálculo
         df[col_lat] = df[col_lat].replace(0.0, np.nan)
         df[col_lon] = df[col_lon].replace(0.0, np.nan)
 
-        # 1. Imputación por Cantón
+        # 1. Imputación por Cantón (Media local)
         df[col_lat] = df[col_lat].fillna(df.groupby('canton')[col_lat].transform('mean'))
         df[col_lon] = df[col_lon].fillna(df.groupby('canton')[col_lon].transform('mean'))
 
-        # 2. Imputación por Provincia
+        # 2. Imputación por Provincia (Media regional)
         df[col_lat] = df[col_lat].fillna(df.groupby('provincia')[col_lat].transform('mean'))
         df[col_lon] = df[col_lon].fillna(df.groupby('provincia')[col_lon].transform('mean'))
 
-        # 3. Media Global
+        # 3. Media Global del dataset
         df[col_lat] = df[col_lat].fillna(df[col_lat].mean())
         df[col_lon] = df[col_lon].fillna(df[col_lon].mean())
 
-        # 4. Fallback JSON
+        # 4. Fallback final mediante JSON de referencia
         fallback_dict = cargar_json_coordenadas()
         indices_nulos = df[df[col_lat].isna()].index
         for idx in indices_nulos:
@@ -73,7 +76,7 @@ def imputar_geo():
                 df.at[idx, col_lat] = fallback_dict[prov][0]
                 df.at[idx, col_lon] = fallback_dict[prov][1]
 
-        # Guardar y Reportar
+        # Sobrescritura del archivo final para el Dashboard
         imputados = mask_nulos_init.sum() - df[col_lat].isna().sum()
         df.to_csv(FILE_PATH, index=False, encoding="utf-8")
 
